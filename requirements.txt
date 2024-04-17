@@ -1,0 +1,5 @@
+torch
+traker[fast]
+datasets
+transformers
+ai2-olmo
