@@ -1,4 +1,4 @@
-import os
+import os, datetime
 from argparse import ArgumentParser
 from tqdm import tqdm
 
@@ -30,12 +30,28 @@ C) {C}
 D) {D}
 
 ANSWER: """.strip()
+MMLU_LABELS = ['A', 'B', 'C', 'D']
 
-MODEL_NAME = "allenai/OLMo-1B"
-RUN_NAME = 'mmlu'
+# tokenizer = AutoTokenizer.from_pretrained(
+#         MODEL_NAME,
+#         padding_side='left',
+#         trust_remote_code=True
+#     )
+#     test_tok = tokenizer(
+#         "This is a test: ", 
+#         return_tensors='pt', 
+#         return_token_type_ids=False,
+#         padding=True
+#     )
+#     print(model(test_tok['input_ids'].to(device), test_tok['attention_mask'].to(device)))
 
-TRAIN_SET_SIZE = 16
-VAL_SET_SIZE = 16
+MODEL_NAME = 'allenai/OLMo-1B'
+RUN_NAME = 'mmlu' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
+# RUN_NAME = 'mmlu-04-17-22-07-46'
+
+TRAIN_SET_SIZE  = 128
+VAL_SET_SIZE    = 128
+BATCH_SIZE      = 2
 
 
 class CausalLM(nn.Module):
@@ -50,27 +66,17 @@ class CausalLM(nn.Module):
             model_name,
             trust_remote_code=True
         )
-
-        # self.model.eval().cuda()
-        self.model.train().cuda()
+        self.model.train().cuda() # .eval()
 
     # /srv/nlprx-lab/share6/dheineman3/miniconda3/envs/trak/lib/python3.10/site-packages/hf_olmo/modeling_olmo.py
     def forward(self, input_ids, attention_mask):
-        generation = self.model.generate(
+        output = self.model.forward(
             input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=1, 
-            do_sample=False,
-            top_p=1,
-            num_beams=1,
-            output_scores=True,
-            return_dict_in_generate=True
+            attention_mask=attention_mask
         )
-        # output = generation.sequences
-        
-        # Get token scores
-        scores = generation.scores[0]
 
+        scores = output.logits
+        scores = scores[..., -1, 34:38] # Get the last token (-1), and only the 34:38 tokens
         return scores
 
 
@@ -87,15 +93,14 @@ def get_dataset(split, inds=None, limit=None):
         trust_remote_code=True
     )
 
-    label_list = ['A', 'B', 'C', 'D']
+    label_list = MMLU_LABELS
     label_toks = {i: tokenizer(label)['input_ids'][0] for i, label in enumerate(label_list)}
     # label_list = [0, 1, 2, 3]
-    # label_to_id = {v: i for i, v in enumerate(label_list)}
     
     print(f'Tokenized labels: {label_list} -> {label_toks}')
 
     def preprocess_function(examples):
-        question, subject, choices, answer = examples['question'], examples['subject'], examples['choices'], examples['answer']
+        question, _, choices, answer = examples['question'], examples['subject'], examples['choices'], examples['answer']
 
         input_text = [
             QUERY_TEMPLATE.format(
@@ -136,7 +141,7 @@ def get_dataset(split, inds=None, limit=None):
     return ds
 
 
-def init_loaders(batch_size=4):
+def init_loaders(batch_size):
     # Corresponds to the HF dataset split
     # auxilary_train, dev, test, validation
     ds_train = get_dataset('test', limit=TRAIN_SET_SIZE) 
@@ -153,17 +158,16 @@ def process_batch(batch):
 
 
 def main(ckpt, out, device='cuda'):
-    loader_train, loader_val = init_loaders()
+    out_path = os.path.join(out, RUN_NAME)
+    loader_train, loader_val = init_loaders(batch_size=BATCH_SIZE)
 
     model = CausalLM(MODEL_NAME)
-
-    out = os.path.join(out, RUN_NAME)
 
     traker = TRAKer(
         model=model,
         task=CausalLMModelOutput,
         train_set_size=TRAIN_SET_SIZE,
-        save_dir=out,
+        save_dir=out_path,
         device=device,
         proj_dim=1024
     )
@@ -189,6 +193,9 @@ def main(ckpt, out, device='cuda'):
         traker.score(batch=batch, num_samples=batch[0].shape[0])
 
     scores = traker.finalize_scores(exp_name=RUN_NAME)
+
+    print(scores)
+    print(scores.shape)
 
 
 if __name__ == "__main__":

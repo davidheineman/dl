@@ -27,7 +27,9 @@ class CausalLMModelOutput(AbstractModelOutput):
         )
 
         # Compare logits to gold labels
-        label = label.to(torch.long)
+        label = label.to(torch.long)        
+        label -= 34 # TEMP: Manual override for MMLU
+
         bindex = torch.arange(logits.shape[0]).to(logits.device, non_blocking=False)
         logits_correct = logits[bindex, label.unsqueeze(0)]
 
@@ -55,23 +57,16 @@ class CausalLMModelOutput(AbstractModelOutput):
         logits = torch.func.functional_call(
             model, (weights, buffers), args=(), kwargs=kw_inputs
         )
+
+        softmax = torch.nn.Softmax(-1)
+        loss_temperature = 1
         
         # Return loss term for prediction
         labels = labels.to(torch.long)
-        softmax = torch.nn.Softmax(-1)
-        loss_temperature = 1
+        labels -= 34 # TEMP: Manual override for MMLU
+
         ps = softmax(logits / loss_temperature)[torch.arange(logits.size(0)), labels]
         out = (1 - ps)
         out = out.clone().detach().unsqueeze(-1)
 
-        # Current problem is the labels don't line up with the OLMo predictions,
-        # which means the "out" value is basically 0, meaning TRAK has nothing meaninful
-        # to work with
-        print(labels)
-        print(logits)
-        print(ps)
-        print(out)
-        print(out[0][0].item())
-
         return out
-
