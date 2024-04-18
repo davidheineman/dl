@@ -7,8 +7,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from trak import TRAKer
-from modelout_functions import CausalLMModelOutput
-from trak.projectors import ProjectionType
+from trak_utils import CausalLMModelOutput
 
 from datasets import load_dataset
 from transformers import (
@@ -35,24 +34,25 @@ ANSWER: """.strip()
 MODEL_NAME = "allenai/OLMo-1B"
 RUN_NAME = 'mmlu'
 
-TRAIN_SET_SIZE = 256
-VAL_SET_SIZE = 256
+TRAIN_SET_SIZE = 16
+VAL_SET_SIZE = 16
 
 
 class CausalLM(nn.Module):
     """
     Wrapper for OLMo model.
     """
-    def __init__(self):
+    def __init__(self, model_name):
         super().__init__()
-        print(f'Loading model {MODEL_NAME}...')
+        print(f'Loading model {model_name}...')
 
         self.model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
+            model_name,
             trust_remote_code=True
         )
 
-        self.model.eval().cuda()
+        # self.model.eval().cuda()
+        self.model.train().cuda()
 
     # /srv/nlprx-lab/share6/dheineman3/miniconda3/envs/trak/lib/python3.10/site-packages/hf_olmo/modeling_olmo.py
     def forward(self, input_ids, attention_mask):
@@ -69,8 +69,7 @@ class CausalLM(nn.Module):
         # output = generation.sequences
         
         # Get token scores
-        scores = generation.scores
-        scores = scores[0]
+        scores = generation.scores[0]
 
         return scores
 
@@ -81,14 +80,19 @@ def get_dataset(split, inds=None, limit=None):
         "cais/mmlu", 
         "all"
     )
-    label_list = [0, 1, 2, 3]
-    label_to_id = {v: i for i, v in enumerate(label_list)}
 
     tokenizer = AutoTokenizer.from_pretrained(
         MODEL_NAME,
         padding_side='left',
         trust_remote_code=True
     )
+
+    label_list = ['A', 'B', 'C', 'D']
+    label_toks = {i: tokenizer(label)['input_ids'][0] for i, label in enumerate(label_list)}
+    # label_list = [0, 1, 2, 3]
+    # label_to_id = {v: i for i, v in enumerate(label_list)}
+    
+    print(f'Tokenized labels: {label_list} -> {label_toks}')
 
     def preprocess_function(examples):
         question, subject, choices, answer = examples['question'], examples['subject'], examples['choices'], examples['answer']
@@ -108,7 +112,7 @@ def get_dataset(split, inds=None, limit=None):
             # padding = "max_length",
             # max_seq_length = 128,
         )
-        input_toks["labels"] = torch.Tensor(answer)
+        input_toks["labels"] = torch.Tensor([label_toks[a] for a in answer])
 
         assert all(isinstance(e, torch.Tensor) for e in input_toks.values())
         
@@ -132,13 +136,6 @@ def get_dataset(split, inds=None, limit=None):
     return ds
 
 
-def init_model(ckpt_path):
-    model = CausalLM()
-    # sd = ch.load(ckpt_path)
-    # model.model.load_state_dict(sd)
-    return model
-
-
 def init_loaders(batch_size=4):
     # Corresponds to the HF dataset split
     # auxilary_train, dev, test, validation
@@ -158,7 +155,7 @@ def process_batch(batch):
 def main(ckpt, out, device='cuda'):
     loader_train, loader_val = init_loaders()
 
-    model = init_model(ckpt)
+    model = CausalLM(MODEL_NAME)
 
     out = os.path.join(out, RUN_NAME)
 
@@ -172,7 +169,6 @@ def main(ckpt, out, device='cuda'):
     )
 
     traker.load_checkpoint(model.state_dict(), model_id=0)
-    traker.projector.proj_type = ProjectionType.normal
     for batch in tqdm(loader_train, desc='Featurizing..'):
         batch = process_batch(batch)
         batch = [x.to(device) for x in batch]
