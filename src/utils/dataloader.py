@@ -7,7 +7,7 @@ from utils.load_tulu import encode_with_messages_format
 
 
 # Adapted from: https://github.com/openai/simple-evals/blob/main/mmlu_eval.py
-QUERY_TEMPLATE = """
+MMLU_TEMPLATE = """
 Answer the following multiple choice question. Your response should be of the following format: 'ANSWER: $LETTER' (without quotes) where LETTER is one of ABCD. 
 
 {Question}
@@ -21,16 +21,16 @@ ANSWER: """.strip()
 MMLU_LABELS = ['A', 'B', 'C', 'D']
 
 
-def get_dataset(split, tokenizer, inds=None, limit=None):
-    # https://huggingface.co/datasets/cais/mmlu
-    raw_datasets = load_dataset(
-        "cais/mmlu", 
-        "all"
-    )
+def load_hf_dataset(task, split, tokenizer, limit=None):
+    if task == 'mmlu':
+        # https://huggingface.co/datasets/cais/mmlu
+        raw_datasets = load_dataset("cais/mmlu", "all")
+        label_list = MMLU_LABELS
+        query_template = MMLU_TEMPLATE
+    else:
+        raise NotImplementedError(f'Task not supported: {task}')
 
-    label_list = MMLU_LABELS
     label_toks = {i: tokenizer(label)['input_ids'][0] for i, label in enumerate(label_list)}
-    # label_list = [0, 1, 2, 3]
     
     print(f'Tokenized labels: {label_list} -> {label_toks}')
 
@@ -38,7 +38,7 @@ def get_dataset(split, tokenizer, inds=None, limit=None):
         question, _, choices, answer = examples['question'], examples['subject'], examples['choices'], examples['answer']
 
         input_text = [
-            QUERY_TEMPLATE.format(
+            query_template.format(
                 Question=q, 
                 A=choices[i][0], B=choices[i][1], C=choices[i][2], D=choices[i][3]
             ) for i, q in enumerate(question)
@@ -115,9 +115,6 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
     lm_datasets = lm_datasets.filter(lambda example: (example['labels'] != -100).any())
 
     ds = lm_datasets[split]
-    
-    # if limit:
-    #     ds = ds.select(range(limit))
 
     print(ds)
 
@@ -151,13 +148,14 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
 
     ds = Dataset.from_list(expanded)
 
+    print(ds)
+
     if limit:
         ds = ds.select(range(limit))
 
     print(ds)
+
     for e in ds:
-        # print(e)
-        # print(len(e['input_ids']), len(e['attention_mask']))
         assert len(e['input_ids']) == max_seq_length and len(e['attention_mask']) == max_seq_length
 
     return ds

@@ -1,7 +1,6 @@
 import os, datetime, json
 from argparse import ArgumentParser
 from tqdm import tqdm
-import torch
 
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -10,7 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, default_data_colla
 from hf_olmo import OLMoTokenizerFast
 
 from utils.trak_output import CausalLMModelOutput
-from utils.dataloader import load_tulu_dataset, get_dataset
+from utils.dataloader import load_tulu_dataset, load_hf_dataset
 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
@@ -18,14 +17,14 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 MODEL_NAME = '/nethome/dheineman3/nlprx/trak/tulu/output/lima_1B'
 
 RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
-# RUN_NAME = 'mmlu-04-17-22-07-46'
-# RUN_NAME = 'lima-04-20-14-55-58'
+# RUN_NAME = 'mmlu-04-17-22-07-46' # <- Original MMLU example
+# RUN_NAME = 'lima-04-20-14-55-58' # <- Development example
 
 TRAIN_FILE = '../data/tulu_v2_lima_only/tulu_v2_data.jsonl'
 
-TRAIN_SET_SIZE  = 8192
+TRAIN_SET_SIZE  = 8192 # LIMA is ~1M tokens?
 MAX_SEQ_LEN     = 256
-VAL_SET_SIZE    = 256
+VAL_SET_SIZE    = 4096 # MMLU test set is 14K examples
 BATCH_SIZE      = 2
 
 
@@ -43,7 +42,6 @@ class CausalLM(nn.Module):
         )
         self.model.train().cuda() # .eval()
 
-    # /srv/nlprx-lab/share6/dheineman3/miniconda3/envs/trak/lib/python3.10/site-packages/hf_olmo/modeling_olmo.py
     def forward(self, input_ids, attention_mask):
         output = self.model.forward(
             input_ids=input_ids,
@@ -53,18 +51,16 @@ class CausalLM(nn.Module):
         scores = output.logits
         # scores = scores[..., -1, 34:38] # Get the last token (-1), and only the 34:38 tokens
         scores = scores[..., -1, :] # Get the last token (-1)
-        scores = scores # Attribution on all tokens and logits!
+
         return scores
 
 
 def init_loaders(tokenizer, batch_size):
-    # Corresponds to the HF dataset split
     ds_train = load_tulu_dataset(
         'train', tokenizer, TRAIN_FILE, limit=TRAIN_SET_SIZE, 
         overwrite_cache=True, max_seq_length=MAX_SEQ_LEN
-    ) 
-    # ds_train   = get_dataset('auxilary_train', tokenizer, limit=VAL_SET_SIZE)
-    ds_val   = get_dataset('validation', tokenizer, limit=VAL_SET_SIZE) # auxilary_train, dev, test, validation
+    )
+    ds_val = load_hf_dataset('mmlu', 'test', tokenizer, limit=VAL_SET_SIZE)
 
     loader_train = DataLoader(ds_train, batch_size=batch_size, shuffle=False, collate_fn=default_data_collator)
     loader_val   = DataLoader(ds_val, batch_size=batch_size, shuffle=False, collate_fn=default_data_collator)
@@ -125,10 +121,7 @@ def main(ckpt, out, device='cuda'):
     print(scores)
     print(scores.shape)
 
-    # Save tokenized dataset as a JSON, with all metadata
-    # This is two datasets
-        # Train dataset with IDs, tokenization with attribution over the test data
-        # MMLU dataset
+    # Save both datasets as a JSON, with all metadata
     output = []
     for i, batch in tqdm(enumerate(loader_train), desc='Saving scores over training data'):
         input_ids, _, labels = process_batch(batch)
