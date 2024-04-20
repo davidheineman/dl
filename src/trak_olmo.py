@@ -1,6 +1,7 @@
-import os, datetime
+import os, datetime, json
 from argparse import ArgumentParser
 from tqdm import tqdm
+import torch
 
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -18,11 +19,13 @@ MODEL_NAME = '/nethome/dheineman3/nlprx/trak/tulu/output/lima_1B'
 
 RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
 # RUN_NAME = 'mmlu-04-17-22-07-46'
+# RUN_NAME = 'lima-04-20-14-55-58'
 
 TRAIN_FILE = '../data/tulu_v2_lima_only/tulu_v2_data.jsonl'
 
-TRAIN_SET_SIZE  = 512
-VAL_SET_SIZE    = 16
+TRAIN_SET_SIZE  = 8192
+MAX_SEQ_LEN     = 256
+VAL_SET_SIZE    = 256
 BATCH_SIZE      = 2
 
 
@@ -58,7 +61,7 @@ def init_loaders(tokenizer, batch_size):
     # Corresponds to the HF dataset split
     ds_train = load_tulu_dataset(
         'train', tokenizer, TRAIN_FILE, limit=TRAIN_SET_SIZE, 
-        overwrite_cache=True, max_seq_length=256
+        overwrite_cache=True, max_seq_length=MAX_SEQ_LEN
     ) 
     # ds_train   = get_dataset('auxilary_train', tokenizer, limit=VAL_SET_SIZE)
     ds_val   = get_dataset('validation', tokenizer, limit=VAL_SET_SIZE) # auxilary_train, dev, test, validation
@@ -98,7 +101,7 @@ def main(ckpt, out, device='cuda'):
     )
 
     traker.load_checkpoint(model.state_dict(), model_id=0)
-    for batch in tqdm(loader_train, desc='Featurizing..'):
+    for batch in tqdm(loader_train, desc='Featurizing'):
         batch = process_batch(batch)
         batch = [x.to(device) for x in batch]
         traker.featurize(batch=batch, num_samples=batch[0].shape[0])
@@ -112,7 +115,7 @@ def main(ckpt, out, device='cuda'):
         num_targets=VAL_SET_SIZE
     )
 
-    for batch in tqdm(loader_val, desc='Scoring..'):
+    for batch in tqdm(loader_val, desc='Scoring'):
         batch = process_batch(batch)
         batch = [x.to(device) for x in batch]
         traker.score(batch=batch, num_samples=batch[0].shape[0])
@@ -121,6 +124,43 @@ def main(ckpt, out, device='cuda'):
 
     print(scores)
     print(scores.shape)
+
+    # Save tokenized dataset as a JSON, with all metadata
+    # This is two datasets
+        # Train dataset with IDs, tokenization with attribution over the test data
+        # MMLU dataset
+    output = []
+    for i, batch in tqdm(enumerate(loader_train), desc='Saving scores over training data'):
+        input_ids, _, labels = process_batch(batch)
+        for j in range(input_ids.shape[0]):
+            id_ = i + j
+            input_toks, label_toks = input_ids[j], labels[j]
+            output += [{
+                'id': id_,
+                'scores': scores[id_, :].tolist(),
+                'input_text': tokenizer.batch_decode([input_toks], skip_special_tokens=True),
+                'labels_text': tokenizer.batch_decode([label_toks], skip_special_tokens=True),
+                'input_ids': input_toks.tolist(),
+                'labels': label_toks.tolist()
+            }]
+    with open(os.path.join(out_path, 'results_trak_train.json'), "w") as f:
+        json.dump(output, f, indent=4)
+
+    output = []
+    for i, batch in tqdm(enumerate(loader_val), desc='Saving test data'):
+        input_ids, _, labels = process_batch(batch)
+        for j in range(input_ids.shape[0]):
+            id_ = i + j
+            input_toks, label_toks = input_ids[j], labels[j]
+            output += [{
+                'id': id_,
+                'input_text': tokenizer.batch_decode([input_toks], skip_special_tokens=True),
+                # 'labels_text': tokenizer.batch_decode([torch.tensor(label_toks)], skip_special_tokens=True),
+                'input_ids': input_toks.tolist(),
+                'labels': label_toks.tolist()
+            }]
+    with open(os.path.join(out_path, 'results_trak_test.json'), "w") as f:
+        json.dump(output, f, indent=4)
 
 
 if __name__ == "__main__":

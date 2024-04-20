@@ -115,8 +115,9 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
     lm_datasets = lm_datasets.filter(lambda example: (example['labels'] != -100).any())
 
     ds = lm_datasets[split]
-    if limit:
-        ds = ds.select(range(limit))
+    
+    # if limit:
+    #     ds = ds.select(range(limit))
 
     print(ds)
 
@@ -128,7 +129,7 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
         num_pad_toks = e['input_ids'].shape[0] - seq_length
         num_prefix_toks = pred_length - seq_length
 
-        for i in range(pred_length-1):
+        for i in range(1, pred_length-1):
             prefix = {
                 'input_ids': e['input_ids'][num_pad_toks:num_prefix_toks+i+1],
                 'attention_mask': e['attention_mask'][num_pad_toks:num_prefix_toks+i+1]
@@ -143,7 +144,7 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
 
             # Sanity check
             if prefix['input_ids'].shape[0] != max_seq_length:
-                print(f'Broken: {prefix}')
+                # print(f'Broken: {prefix}')
                 continue
             
             expanded += [prefix]
