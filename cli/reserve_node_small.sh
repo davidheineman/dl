@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -G a40:8
+#SBATCH -G a40:2
 #SBATCH -c 40
 #SBATCH -p nlprx-lab
 #SBATCH --qos short

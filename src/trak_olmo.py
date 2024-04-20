@@ -2,55 +2,27 @@ import os, datetime
 from argparse import ArgumentParser
 from tqdm import tqdm
 
-import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
 from trak import TRAKer
-from trak_utils import CausalLMModelOutput
+from transformers import AutoModelForCausalLM, AutoTokenizer, default_data_collator
+from hf_olmo import OLMoTokenizerFast
 
-from datasets import load_dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    default_data_collator,
-)
+from utils.trak_output import CausalLMModelOutput
+from utils.dataloader import load_tulu_dataset, get_dataset
 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-# Adapted from: https://github.com/openai/simple-evals/blob/main/mmlu_eval.py
-QUERY_TEMPLATE = """
-Answer the following multiple choice question. Your response should be of the following format: 'ANSWER: $LETTER' (without quotes) where LETTER is one of ABCD. 
+# MODEL_NAME = 'allenai/OLMo-1B'
+MODEL_NAME = '/nethome/dheineman3/nlprx/trak/tulu/output/lima_1B'
 
-{Question}
-
-A) {A}
-B) {B}
-C) {C}
-D) {D}
-
-ANSWER: """.strip()
-MMLU_LABELS = ['A', 'B', 'C', 'D']
-
-# tokenizer = AutoTokenizer.from_pretrained(
-#         MODEL_NAME,
-#         padding_side='left',
-#         trust_remote_code=True
-#     )
-#     test_tok = tokenizer(
-#         "This is a test: ", 
-#         return_tensors='pt', 
-#         return_token_type_ids=False,
-#         padding=True
-#     )
-#     print(model(test_tok['input_ids'].to(device), test_tok['attention_mask'].to(device)))
-
-MODEL_NAME = 'allenai/OLMo-1B'
-RUN_NAME = 'mmlu' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
+RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
 # RUN_NAME = 'mmlu-04-17-22-07-46'
 
+TRAIN_FILE = '../data/tulu_v2_lima_only/tulu_v2_data.jsonl'
+
 TRAIN_SET_SIZE  = 128
-VAL_SET_SIZE    = 128
+VAL_SET_SIZE    = 16
 BATCH_SIZE      = 2
 
 
@@ -76,76 +48,17 @@ class CausalLM(nn.Module):
         )
 
         scores = output.logits
-        scores = scores[..., -1, 34:38] # Get the last token (-1), and only the 34:38 tokens
+        # scores = scores[..., -1, 34:38] # Get the last token (-1), and only the 34:38 tokens
+        scores = scores[..., -1, :] # Get the last token (-1)
+        scores = scores # Attribution on all tokens and logits!
         return scores
 
 
-def get_dataset(split, inds=None, limit=None):
-    # https://huggingface.co/datasets/cais/mmlu
-    raw_datasets = load_dataset(
-        "cais/mmlu", 
-        "all"
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_NAME,
-        padding_side='left',
-        trust_remote_code=True
-    )
-
-    label_list = MMLU_LABELS
-    label_toks = {i: tokenizer(label)['input_ids'][0] for i, label in enumerate(label_list)}
-    # label_list = [0, 1, 2, 3]
-    
-    print(f'Tokenized labels: {label_list} -> {label_toks}')
-
-    def preprocess_function(examples):
-        question, _, choices, answer = examples['question'], examples['subject'], examples['choices'], examples['answer']
-
-        input_text = [
-            QUERY_TEMPLATE.format(
-                Question=q, 
-                A=choices[i][0], B=choices[i][1], C=choices[i][2], D=choices[i][3]
-            ) for i, q in enumerate(question)
-        ]
-        
-        input_toks = tokenizer(
-            input_text, 
-            return_tensors='pt', 
-            return_token_type_ids=False,
-            padding=True,
-            # padding = "max_length",
-            # max_seq_length = 128,
-        )
-        input_toks["labels"] = torch.Tensor([label_toks[a] for a in answer])
-
-        assert all(isinstance(e, torch.Tensor) for e in input_toks.values())
-        
-        return input_toks
-
-    ds = raw_datasets[split]
-    if limit:
-        ds = ds.select(range(limit))
-
-    ds = ds.map(
-        preprocess_function,
-        batched=True,
-        load_from_cache_file=(not False),
-        desc="Running tokenizer on dataset",
-    )
-
-    # 'input_ids', 'attention_mask', 'label'
-    ds = ds.remove_columns(['question', 'subject', 'choices', 'answer'])
-    print(ds)
-    
-    return ds
-
-
-def init_loaders(batch_size):
+def init_loaders(tokenizer, batch_size):
     # Corresponds to the HF dataset split
-    # auxilary_train, dev, test, validation
-    ds_train = get_dataset('test', limit=TRAIN_SET_SIZE) 
-    ds_val   = get_dataset('validation', limit=VAL_SET_SIZE)
+    ds_train = load_tulu_dataset('train', tokenizer, TRAIN_FILE, limit=TRAIN_SET_SIZE, overwrite_cache=True) 
+    # ds_train   = get_dataset('auxilary_train', tokenizer, limit=VAL_SET_SIZE) # auxilary_train, dev, test, validation
+    ds_val   = get_dataset('validation', tokenizer, limit=VAL_SET_SIZE) # auxilary_train, dev, test, validation
 
     loader_train = DataLoader(ds_train, batch_size=batch_size, shuffle=False, collate_fn=default_data_collator)
     loader_val   = DataLoader(ds_val, batch_size=batch_size, shuffle=False, collate_fn=default_data_collator)
@@ -159,9 +72,18 @@ def process_batch(batch):
 
 def main(ckpt, out, device='cuda'):
     out_path = os.path.join(out, RUN_NAME)
-    loader_train, loader_val = init_loaders(batch_size=BATCH_SIZE)
 
     model = CausalLM(MODEL_NAME)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_NAME,
+        padding_side='left',
+        trust_remote_code=True
+    )
+    if isinstance(tokenizer, OLMoTokenizerFast):
+        tokenizer.bos_token = tokenizer.eos_token
+
+    loader_train, loader_val = init_loaders(tokenizer, batch_size=BATCH_SIZE)
 
     traker = TRAKer(
         model=model,
@@ -204,3 +126,19 @@ if __name__ == "__main__":
     parser.add_argument('--out', type=str, help='dir to save TRAK scores and metadata to', default='../results')
     args = parser.parse_args()
     main(args.ckpt, args.out)
+
+
+def test_tokenizer(input_string, device='cuda'):
+    model = CausalLM(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_NAME,
+        padding_side='left',
+        trust_remote_code=True
+    )
+    test_tok = tokenizer(
+        input_string, 
+        return_tensors='pt', 
+        return_token_type_ids=False,
+        padding=True
+    )
+    print(model(test_tok['input_ids'].to(device), test_tok['attention_mask'].to(device)))
