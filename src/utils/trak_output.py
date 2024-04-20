@@ -26,18 +26,12 @@ class CausalLMModelOutput(AbstractModelOutput):
             model, (weights, buffers), args=(), kwargs=kw_inputs
         )
 
-        print(label)
-        print(logits)
-
         # Compare logits to gold labels
         label = label.to(torch.long)        
         # label -= 34 # TEMP: Manual override for MMLU
 
         bindex = torch.arange(logits.shape[0]).to(logits.device, non_blocking=False)
         logits_correct = logits[bindex, label.unsqueeze(0)]
-        
-        print(logits.shape)
-        print(logits_correct.shape)
 
         # Calculate model output function
         cloned_logits = logits.clone()

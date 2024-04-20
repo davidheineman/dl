@@ -30,6 +30,10 @@ def encode_with_messages_format(example, tokenizer, max_seq_length, add_bos=Fals
     input_ids = tokenized_example.input_ids
     labels = input_ids.clone()
 
+    # Truncate to max length
+    # input_ids = input_ids[..., :max_seq_length]
+    # print(input_ids.shape)
+
     # mask the non-assistant part for avoiding loss
     for message_idx, message in enumerate(messages):
         if message["role"] != "assistant":
@@ -72,9 +76,9 @@ def encode_with_messages_format(example, tokenizer, max_seq_length, add_bos=Fals
         'attention_mask': features['attention_mask'].flatten(),
     }
     
-    features['labels'] = features['labels'][..., -2]
-    features['input_ids'] = features['labels'][:max_seq_length]
-    features['attention_mask'] = features['labels'][:max_seq_length]
+    # Only select a single token for a label
+    # TODO: We shouldn't be doing this for LM train data
+    # features['labels'] = features['labels'][..., -2]
 
     return features
 

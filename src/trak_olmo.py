@@ -21,7 +21,7 @@ RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
 
 TRAIN_FILE = '../data/tulu_v2_lima_only/tulu_v2_data.jsonl'
 
-TRAIN_SET_SIZE  = 128
+TRAIN_SET_SIZE  = 512
 VAL_SET_SIZE    = 16
 BATCH_SIZE      = 2
 
@@ -56,8 +56,11 @@ class CausalLM(nn.Module):
 
 def init_loaders(tokenizer, batch_size):
     # Corresponds to the HF dataset split
-    ds_train = load_tulu_dataset('train', tokenizer, TRAIN_FILE, limit=TRAIN_SET_SIZE, overwrite_cache=True) 
-    # ds_train   = get_dataset('auxilary_train', tokenizer, limit=VAL_SET_SIZE) # auxilary_train, dev, test, validation
+    ds_train = load_tulu_dataset(
+        'train', tokenizer, TRAIN_FILE, limit=TRAIN_SET_SIZE, 
+        overwrite_cache=True, max_seq_length=256
+    ) 
+    # ds_train   = get_dataset('auxilary_train', tokenizer, limit=VAL_SET_SIZE)
     ds_val   = get_dataset('validation', tokenizer, limit=VAL_SET_SIZE) # auxilary_train, dev, test, validation
 
     loader_train = DataLoader(ds_train, batch_size=batch_size, shuffle=False, collate_fn=default_data_collator)

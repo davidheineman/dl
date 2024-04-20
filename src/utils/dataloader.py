@@ -1,8 +1,9 @@
 from functools import partial
+from datasets import load_dataset, Dataset
 import torch
-from datasets import load_dataset
+import tqdm
 
-from utils.load_tulu import encode_with_messages_format, pad
+from utils.load_tulu import encode_with_messages_format
 
 
 # Adapted from: https://github.com/openai/simple-evals/blob/main/mmlu_eval.py
@@ -71,9 +72,9 @@ def get_dataset(split, tokenizer, inds=None, limit=None):
     
     print(ds)
 
-    for e in ds:
-        # print(e['input_ids'].shape, e['labels'].shape, e['attention_mask'].shape)
-        print(e)
+    # for e in ds:
+    #     print(e['input_ids'].shape, e['labels'].shape, e['attention_mask'].shape)
+    #     print(e)
     
     return ds
 
@@ -117,15 +118,45 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
     if limit:
         ds = ds.select(range(limit))
 
-    # print(ds)
+    print(ds)
+
+    # Expand dataset such that each label token is an individual prediction
+    expanded = []
+    for e in tqdm.tqdm(ds, desc="Expanding dataset"):
+        seq_length = (e['input_ids'] != tokenizer.pad_token_id).sum()
+        pred_length = (e['labels'] != -100).sum()
+        num_pad_toks = e['input_ids'].shape[0] - seq_length
+        num_prefix_toks = pred_length - seq_length
+
+        for i in range(pred_length-1):
+            prefix = {
+                'input_ids': e['input_ids'][num_pad_toks:num_prefix_toks+i+1],
+                'attention_mask': e['attention_mask'][num_pad_toks:num_prefix_toks+i+1]
+            }
+            prefix = tokenizer.pad(
+                prefix,
+                padding='max_length',
+                max_length=max_seq_length,
+                return_tensors='pt',
+            )
+            prefix['labels'] = e['input_ids'][num_prefix_toks+i+1].clone().detach()
+
+            # Sanity check
+            if prefix['input_ids'].shape[0] != max_seq_length:
+                print(f'Broken: {prefix}')
+                continue
+            
+            expanded += [prefix]
+
+    ds = Dataset.from_list(expanded)
+
+    if limit:
+        ds = ds.select(range(limit))
+
+    print(ds)
     for e in ds:
-        print(e)
-        # print(e['input_ids'])
-        # print(e['labels'])
-        # print(e['attention_mask'])
-
-        # print(e['input_ids'].shape, e['labels'].shape, e['attention_mask'].shape)
-
-        # features = pad(tokenizer, [e], padding='max_length', max_length=2048)
+        # print(e)
+        # print(len(e['input_ids']), len(e['attention_mask']))
+        assert len(e['input_ids']) == max_seq_length and len(e['attention_mask']) == max_seq_length
 
     return ds
