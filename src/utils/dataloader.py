@@ -1,5 +1,5 @@
 from functools import partial
-from datasets import load_dataset, Dataset
+from datasets import Dataset, load_dataset
 import torch
 import tqdm
 
@@ -115,21 +115,24 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
     lm_datasets = lm_datasets.filter(lambda example: (example['labels'] != -100).any())
 
     ds = lm_datasets[split]
+    # ds = ds.select(range(7)) # <= For testing on a small scale of tokens
 
     print(ds)
 
     # Expand dataset such that each label token is an individual prediction
     expanded = []
-    for e in tqdm.tqdm(ds, desc="Expanding dataset"):
+    for example_idx, e in tqdm.tqdm(enumerate(ds), desc="Expanding dataset"):
         seq_length = (e['input_ids'] != tokenizer.pad_token_id).sum()
         pred_length = (e['labels'] != -100).sum()
         num_pad_toks = e['input_ids'].shape[0] - seq_length
         num_prefix_toks = pred_length - seq_length
 
-        for i in range(1, pred_length-1):
+        for token_idx in range(1, pred_length-1):
             prefix = {
-                'input_ids': e['input_ids'][num_pad_toks:num_prefix_toks+i+1],
-                'attention_mask': e['attention_mask'][num_pad_toks:num_prefix_toks+i+1]
+                'input_ids': e['input_ids'][num_pad_toks:num_prefix_toks+token_idx+1],
+                'attention_mask': e['attention_mask'][num_pad_toks:num_prefix_toks+token_idx+1],
+                'example_id': example_idx,
+                'full_input_ids': e['input_ids'][num_pad_toks:],
             }
             prefix = tokenizer.pad(
                 prefix,
@@ -137,7 +140,7 @@ def load_tulu_dataset(split, tokenizer, train_file, max_seq_length=2048, overwri
                 max_length=max_seq_length,
                 return_tensors='pt',
             )
-            prefix['labels'] = e['input_ids'][num_prefix_toks+i+1].clone().detach()
+            prefix['labels'] = e['input_ids'][num_prefix_toks+token_idx+1].clone().detach()
 
             # Sanity check
             if prefix['input_ids'].shape[0] != max_seq_length:

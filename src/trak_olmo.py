@@ -2,6 +2,7 @@ import os, datetime, json
 from argparse import ArgumentParser
 from tqdm import tqdm
 
+import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from trak import TRAKer
@@ -16,16 +17,27 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 # MODEL_NAME = 'allenai/OLMo-1B'
 MODEL_NAME = '/nethome/dheineman3/nlprx/trak/tulu/output/lima_1B'
 
-RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
-# RUN_NAME = 'mmlu-04-17-22-07-46' # <- Original MMLU example
+# RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
+RUN_NAME = 'lima-04-20-18-00-22' # <- 66526 LIMA tokens
+# RUN_NAME = 'lima-04-20-15-56-54' # <- 8192 LIMA tokens
 # RUN_NAME = 'lima-04-20-14-55-58' # <- Development example
+# RUN_NAME = 'mmlu-04-17-22-07-46' # <- Original MMLU example
 
 TRAIN_FILE = '../data/tulu_v2_lima_only/tulu_v2_data.jsonl'
 
-TRAIN_SET_SIZE  = 8192 # LIMA is ~1M tokens?
+# On A100, it takes ~1.6s/tok. i.e., 38hr for 150K LIMA tokens
+
+# 66526 LIMA tokens
+TRAIN_SET_SIZE  = 65536  # LIMA is ~150K tokens (166048)
 MAX_SEQ_LEN     = 256
-VAL_SET_SIZE    = 4096 # MMLU test set is 14K examples
-BATCH_SIZE      = 2
+VAL_SET_SIZE    = 13000   # MMLU test set is 14K examples
+BATCH_SIZE      = 1
+
+# Development set
+# TRAIN_SET_SIZE  = 512
+# MAX_SEQ_LEN     = 256
+# VAL_SET_SIZE    = 128
+# BATCH_SIZE      = 1
 
 
 class CausalLM(nn.Module):
@@ -49,7 +61,6 @@ class CausalLM(nn.Module):
         )
 
         scores = output.logits
-        # scores = scores[..., -1, 34:38] # Get the last token (-1), and only the 34:38 tokens
         scores = scores[..., -1, :] # Get the last token (-1)
 
         return scores
@@ -70,6 +81,70 @@ def init_loaders(tokenizer, batch_size):
 
 def process_batch(batch):
     return batch['input_ids'], batch['attention_mask'], batch['labels']
+
+
+def list_to_tensor(lst):
+    """
+    Maps a 3D python list to a 3D tenor, broadcasting '-inf' to the rest of the tensor
+    """
+    max_inner_length = max(len(sublst) for sublst in lst)
+    max_middle_length = max(len(subsublst) for sublst in lst for subsublst in sublst)
+    padded_lst = []
+    for sublst in lst:
+        padded_sublst = []
+        for subsublst in sublst:
+            padded_subsublst = subsublst + [-float('inf')] * (max_middle_length - len(subsublst))
+            padded_sublst.append(padded_subsublst)
+        padded_sublst += [[-float('inf')] * max_middle_length] * (max_inner_length - len(sublst))
+        padded_lst.append(padded_sublst)
+    return torch.tensor(padded_lst)
+
+
+def save_outputs(out_path, scores, loader_train, loader_val, tokenizer):
+    """
+    Save both datasets as a JSON, with all metadata
+    """
+    out_text = {}
+    out_score = {}
+    for i, batch in tqdm(enumerate(loader_train), desc='Saving scores over training data'):
+        input_ids, labels, e_ids, all_input_ids = batch['input_ids'], batch['labels'], batch['example_id'], batch['full_input_ids']
+        for j in range(input_ids.shape[0]):
+            id_ = i + j
+            input_toks, label_toks, e_id, all_input_toks = input_ids[j], labels[j], int(e_ids[j]), all_input_ids[j]
+            if e_id not in out_text:
+                out_text[e_id] = {
+                    'input_text': tokenizer.batch_decode([all_input_toks], skip_special_tokens=True)[0],
+                    'labels_text': []
+                }
+            out_text[e_id]['labels_text'] += tokenizer.batch_decode([label_toks], skip_special_tokens=True)
+            
+            if e_id not in out_score: out_score[e_id] = []
+            out_score[e_id] += [scores[id_, :].tolist()]
+    out_text  = [out_text[i] for i in sorted(list(out_text.keys()))] # Convert output to list
+    out_score = [out_score[i] for i in sorted(list(out_score.keys()))]
+    out_score = list_to_tensor(out_score)
+
+    print(out_score.shape)
+
+    with open(os.path.join(out_path, 'trak_train.json'), "w") as f:
+        json.dump(out_text, f) # indent=4
+    torch.save(out_score, os.path.join(out_path, 'attribution_scores.pt'))
+
+    output = []
+    for i, batch in tqdm(enumerate(loader_val), desc='Saving test data'):
+        input_ids, _, labels = process_batch(batch)
+        for j in range(input_ids.shape[0]):
+            id_ = i + j
+            input_toks, label_toks = input_ids[j], labels[j].unsqueeze(0).int()
+            output += [{
+                # 'id': id_,
+                'input_text': tokenizer.batch_decode([input_toks], skip_special_tokens=True)[0],
+                'label_text': tokenizer.batch_decode([label_toks], skip_special_tokens=True)[0],
+                # 'label_id': label_toks.tolist(),
+                # 'input_ids': input_toks.tolist(),
+            }]
+    with open(os.path.join(out_path, 'trak_test.json'), "w") as f:
+        json.dump(output, f) # indent=4
 
 
 def main(ckpt, out, device='cuda'):
@@ -121,42 +196,15 @@ def main(ckpt, out, device='cuda'):
     print(scores)
     print(scores.shape)
 
-    # Save both datasets as a JSON, with all metadata
-    output = []
-    for i, batch in tqdm(enumerate(loader_train), desc='Saving scores over training data'):
-        input_ids, _, labels = process_batch(batch)
-        for j in range(input_ids.shape[0]):
-            id_ = i + j
-            input_toks, label_toks = input_ids[j], labels[j]
-            output += [{
-                'id': id_,
-                'scores': scores[id_, :].tolist(),
-                'input_text': tokenizer.batch_decode([input_toks], skip_special_tokens=True),
-                'labels_text': tokenizer.batch_decode([label_toks], skip_special_tokens=True),
-                'input_ids': input_toks.tolist(),
-                'labels': label_toks.tolist()
-            }]
-    with open(os.path.join(out_path, 'results_trak_train.json'), "w") as f:
-        json.dump(output, f, indent=4)
-
-    output = []
-    for i, batch in tqdm(enumerate(loader_val), desc='Saving test data'):
-        input_ids, _, labels = process_batch(batch)
-        for j in range(input_ids.shape[0]):
-            id_ = i + j
-            input_toks, label_toks = input_ids[j], labels[j]
-            output += [{
-                'id': id_,
-                'input_text': tokenizer.batch_decode([input_toks], skip_special_tokens=True),
-                # 'labels_text': tokenizer.batch_decode([torch.tensor(label_toks)], skip_special_tokens=True),
-                'input_ids': input_toks.tolist(),
-                'labels': label_toks.tolist()
-            }]
-    with open(os.path.join(out_path, 'results_trak_test.json'), "w") as f:
-        json.dump(output, f, indent=4)
+    save_outputs(out_path, scores, loader_train, loader_val, tokenizer)
 
 
 if __name__ == "__main__":
+    """
+    CUDA_VISIBLE_GPUS=0 nohup python trak_olmo.py > ../log/trak_olmo.log &
+
+    scp dheineman3@sky1.cc.gatech.edu:/nethome/dheineman3/nlprx/trak/results/lima-04-20-18-00-22/attribution_scores.pt /Users/dhei/Desktop
+    """
     parser = ArgumentParser()
     parser.add_argument('--ckpt', type=str, help='model checkpoint', default=None)
     parser.add_argument('--out', type=str, help='dir to save TRAK scores and metadata to', default='../results')

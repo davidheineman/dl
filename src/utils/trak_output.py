@@ -27,8 +27,7 @@ class CausalLMModelOutput(AbstractModelOutput):
         )
 
         # Compare logits to gold labels
-        label = label.to(torch.long)        
-        # label -= 34 # TEMP: Manual override for MMLU
+        label = label.to(torch.long)
 
         bindex = torch.arange(logits.shape[0]).to(logits.device, non_blocking=False)
         logits_correct = logits[bindex, label.unsqueeze(0)]
@@ -63,7 +62,6 @@ class CausalLMModelOutput(AbstractModelOutput):
         
         # Return loss term for prediction
         labels = labels.to(torch.long)
-        # labels -= 34 # TEMP: Manual override for MMLU
 
         ps = softmax(logits / loss_temperature)[torch.arange(logits.size(0)), labels]
         out = (1 - ps)
