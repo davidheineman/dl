@@ -15,10 +15,12 @@ from utils.dataloader import load_tulu_dataset, load_hf_dataset
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # MODEL_NAME = 'allenai/OLMo-1B'
+# MODEL_NAME = 'davidheineman/OLMo-1B-Instruct'
 MODEL_NAME = '/nethome/dheineman3/nlprx/trak/tulu/output/lima_1B'
 
-# RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
-RUN_NAME = 'lima-04-20-18-00-22' # <- 66526 LIMA tokens
+RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
+# RUN_NAME = 'lima-04-20-18-00-22' # <- 65536 LIMA tokens
+# RUN_NAME = 'lima-04-26-00-46-13' # <- 65536 LIMA tokens (2nd run)
 # RUN_NAME = 'lima-04-20-15-56-54' # <- 8192 LIMA tokens
 # RUN_NAME = 'lima-04-20-14-55-58' # <- Development example
 # RUN_NAME = 'mmlu-04-17-22-07-46' # <- Original MMLU example
@@ -27,7 +29,7 @@ TRAIN_FILE = '../data/tulu_v2_lima_only/tulu_v2_data.jsonl'
 
 # On A100, it takes ~1.6s/tok. i.e., 38hr for 150K LIMA tokens
 
-# 66526 LIMA tokens
+# 65536 LIMA tokens
 TRAIN_SET_SIZE  = 65536  # LIMA is ~150K tokens (166048)
 MAX_SEQ_LEN     = 256
 VAL_SET_SIZE    = 13000   # MMLU test set is 14K examples
@@ -52,6 +54,9 @@ class CausalLM(nn.Module):
             model_name,
             trust_remote_code=True
         )
+
+        # self.model.push_to_hub("davidheineman/OLMo-1B-Instruct")
+
         self.model.train().cuda() # .eval()
 
     def forward(self, input_ids, attention_mask):
@@ -201,9 +206,9 @@ def main(ckpt, out, device='cuda'):
 
 if __name__ == "__main__":
     """
-    CUDA_VISIBLE_GPUS=0 nohup python trak_olmo.py > ../log/trak_olmo.log &
+    CUDA_VISIBLE_GPUS=0 nohup python trak_olmo.py > ../log/trak_olmo.log & tail -f ../log/trak_olmo.log 
 
-    scp dheineman3@sky1.cc.gatech.edu:/nethome/dheineman3/nlprx/trak/results/lima-04-20-18-00-22/attribution_scores.pt /Users/dhei/Desktop
+    scp dheineman3@sky1.cc.gatech.edu:/nethome/dheineman3/nlprx/trak/results/lima-04-20-18-00-22/attribution_scores.pt /Users/dhei/personal/4644/dl/data/trak
     """
     parser = ArgumentParser()
     parser.add_argument('--ckpt', type=str, help='model checkpoint', default=None)

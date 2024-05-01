@@ -2,6 +2,7 @@ from tqdm.auto import tqdm
 import json, os
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from transformers import BertTokenizer, BertForSequenceClassification, AdamW
 
@@ -21,6 +22,13 @@ class ScoresDataset(Dataset):
             test_data = json.load(test_file)
 
         scores_data = torch.load(scores_path)
+
+        # Softmax the last dimension of the scores
+        scores_norm = scores_data.permute(2, 1, 0).contiguous()
+        scores_norm = scores_norm.view(scores_norm.size(0), -1)
+        scores_norm = torch.nn.functional.softmax(scores_norm, dim=1)
+        scores_norm = scores_norm.permute(1, 0)
+        scores_data = scores_norm.view(scores_data.size())
 
         self.pairs_list = []
 
@@ -75,20 +83,25 @@ class ScoresDataset(Dataset):
 
 
 def main():
+    out_path = os.path.join(RESULT_PATH)
+
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     dataset = ScoresDataset(
         tokenizer,
         os.path.join(DATA_PATH, 'trak_train.json'), 
         os.path.join(DATA_PATH, 'trak_test.json'),
         os.path.join(DATA_PATH, 'attribution_scores.pt'),
-        limit = 30_000 # 1_000_000
+        limit = 100 # 30_000 # 1_000_000  # The xl dataset has 85_196_800 examples
     )
 
-    data_loader = DataLoader(
-       dataset, 
-       batch_size=48,
-       shuffle=True
-    )
+    train_size = int(len(dataset) * 0.8)
+    test_size = len(dataset) - train_size
+    
+    train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size], generator=torch.Generator(device='cpu'))
+
+    train_data_loader = DataLoader(train_dataset, batch_size=48, shuffle=True, generator=torch.Generator(device='cpu'))
+    test_data_loader  = DataLoader(test_dataset,  batch_size=48, shuffle=True, generator=torch.Generator(device='cpu'))
+
 
     learning_rate = 5e-4
     num_epochs = 10
@@ -101,7 +114,7 @@ def main():
     total_losses = []
 
     for epoch in range(num_epochs):
-        iter = tqdm(data_loader, desc=f"Epoch {epoch+1}", unit='batch', leave=True)
+        iter = tqdm(train_data_loader, desc=f"Epoch {epoch+1}", unit='batch', leave=True)
 
         for input, score in iter:
             inputs2 = {k: v.squeeze().to(DEVICE) for k,v in input.items()}
@@ -116,15 +129,48 @@ def main():
             loss.backward()
             optimizer.step()
 
-            iter.set_description(f'Epoch {epoch + 1}/{num_epochs}, Current Loss: {loss:.4f}, Average Loss: {(total_loss/len(data_loader)):.4f}')
+            iter.set_description(f'Epoch {epoch+1}/{num_epochs}, Current Loss: {loss:.4f}, Average Loss: {(total_loss/len(train_data_loader)):.4f}')
 
-        total_losses += [(total_loss/len(data_loader))]
+        total_losses += [(total_loss/len(train_data_loader))]
         
         # Saving Model
-        model.save_pretrained(os.path.join(RESULT_PATH))
+        model.save_pretrained(out_path)
     
     print(f'All losses: {total_losses}')
+
+    # Eval loop
+    evaluate(model, test_data_loader)
+
+
+def evaluate(model, dataloader):
+    model.eval()
+
+    overall_error = 0
+    count = 0
+
+    with torch.no_grad():
+        iter_ = tqdm(dataloader, leave=True)
+        for input, score in iter_:
+            inputs2 = {k: v.squeeze().to(DEVICE) for k,v in input.items()}
+            score2 = score.float().to(DEVICE)
+            
+            if (len(inputs2['input_ids'].shape) != 2):
+                inputs2 = {k: v.reshape(1, inputs2['input_ids'].shape[0]) for k,v in inputs2.items()}
+
+            output = model(**inputs2)
+            cur_pred = output.logits.squeeze().to(DEVICE)
+            target = score2.reshape(cur_pred.shape)
+
+            cur_error = nn.functional.mse_loss(cur_pred, target, reduction='sum')
+            overall_error += cur_error.item()
+            count += target.shape[0]
+
+    mse = overall_error / count
+    print(f"Final MSE: {mse}")
 
 
 if __name__ == '__main__':
     main()
+
+    # model = BertForSequenceClassification.from_pretrained(out_path).to(DEVICE)
+    # evaluate(model, test_data_loader)
