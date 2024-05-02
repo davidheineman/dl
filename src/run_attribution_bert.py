@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 from rake_nltk import Rake
 import nltk
 
+MODEL_PATH = "../results/bert-attribution-suhani-small"
 
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 DATA_PATH = os.path.join('..', 'data', 'alpaca')
@@ -135,11 +136,10 @@ def save_entries_at_indices(indices, jsonl_file, output_file):
 
 
 def main():
-    # download_alpaca()
-    # download_mmlu('test')
+    download_alpaca()
+    download_mmlu('test')
 
-    path = "../results/bert-attribution-suhani-small"
-    model = BertForSequenceClassification.from_pretrained(path).to(DEVICE)
+    model = BertForSequenceClassification.from_pretrained(MODEL_PATH).to(DEVICE)
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
     total_dataset = ScoresDataset(

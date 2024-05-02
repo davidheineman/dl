@@ -8,7 +8,7 @@ from transformers import BertTokenizer, BertForSequenceClassification, AdamW
 
 DEVICE = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
 
-DATA_PATH = '../results/lima-04-20-18-00-22'
+DATA_PATH = '../data/attribution_scores'
 RESULT_PATH = '../results/bert-attribution'
 
 class ScoresDataset(Dataset):

@@ -15,31 +15,15 @@ from utils.dataloader import load_tulu_dataset, load_hf_dataset
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # MODEL_NAME = 'allenai/OLMo-1B'
-# MODEL_NAME = 'davidheineman/OLMo-1B-Instruct'
-MODEL_NAME = '/nethome/dheineman3/nlprx/trak/tulu/output/lima_1B'
+MODEL_NAME = 'davidheineman/OLMo-1B-Instruct'
+TRAIN_FILE = '../data/lima.jsonl'
 
 RUN_NAME = 'lima' + datetime.datetime.now().strftime("-%m-%d-%H-%M-%S")
-# RUN_NAME = 'lima-04-20-18-00-22' # <- 65536 LIMA tokens
-# RUN_NAME = 'lima-04-26-00-46-13' # <- 65536 LIMA tokens (2nd run)
-# RUN_NAME = 'lima-04-20-15-56-54' # <- 8192 LIMA tokens
-# RUN_NAME = 'lima-04-20-14-55-58' # <- Development example
-# RUN_NAME = 'mmlu-04-17-22-07-46' # <- Original MMLU example
 
-TRAIN_FILE = '../data/tulu_v2_lima_only/tulu_v2_data.jsonl'
-
-# On A100, it takes ~1.6s/tok. i.e., 38hr for 150K LIMA tokens
-
-# 65536 LIMA tokens
 TRAIN_SET_SIZE  = 65536  # LIMA is ~150K tokens (166048)
 MAX_SEQ_LEN     = 256
 VAL_SET_SIZE    = 13000   # MMLU test set is 14K examples
 BATCH_SIZE      = 1
-
-# Development set
-# TRAIN_SET_SIZE  = 512
-# MAX_SEQ_LEN     = 256
-# VAL_SET_SIZE    = 128
-# BATCH_SIZE      = 1
 
 
 class CausalLM(nn.Module):
@@ -55,9 +39,7 @@ class CausalLM(nn.Module):
             trust_remote_code=True
         )
 
-        # self.model.push_to_hub("davidheineman/OLMo-1B-Instruct")
-
-        self.model.train().cuda() # .eval()
+        self.model.train().cuda()
 
     def forward(self, input_ids, attention_mask):
         output = self.model.forward(
@@ -142,14 +124,11 @@ def save_outputs(out_path, scores, loader_train, loader_val, tokenizer):
             id_ = i + j
             input_toks, label_toks = input_ids[j], labels[j].unsqueeze(0).int()
             output += [{
-                # 'id': id_,
                 'input_text': tokenizer.batch_decode([input_toks], skip_special_tokens=True)[0],
                 'label_text': tokenizer.batch_decode([label_toks], skip_special_tokens=True)[0],
-                # 'label_id': label_toks.tolist(),
-                # 'input_ids': input_toks.tolist(),
             }]
     with open(os.path.join(out_path, 'trak_test.json'), "w") as f:
-        json.dump(output, f) # indent=4
+        json.dump(output, f)
 
 
 def main(ckpt, out, device='cuda'):
