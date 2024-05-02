@@ -1,4 +1,4 @@
-Code for data quality estimation paper for CS 4644.
+Code for data quality estimation paper for CS 4644. Additional analysis and BERT training code available on the shared project [Google Drive](https://drive.google.com/drive/folders/174WnPDXGnrzSYUB6bzVNlOnz0NnMZGIH).
 
 ## (Optional) OLMo Fine-Tuning Setup
 For many experiments we fine-tune the OLMo 1B model on instruction datasets. To replicate our setup, please use the Tulu library which provides training scripts. The model used in our work is available at [davidheineman/OLMo-1B-Instruct](https://huggingface.co/davidheineman/OLMo-1B-Instruct).
